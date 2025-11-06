@@ -59,7 +59,7 @@ class MLXSampler:
     def INPUT_TYPES(s):
         return {"required":
             {"mlx_model": ("mlx_model",),
-            "seed": ("INT", {"default": 0, "min": 0, "max": 2**32 - 1}),
+            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
             "steps": ("INT", {"default": 4, "min": 1, "max": 10000}),
             "cfg": ("FLOAT", {"default": 0, "min": 0.0, "max": 100.0, "step":0.1, "round": 0.01}),
             "mlx_positive_conditioning": ("mlx_conditioning", ),
@@ -71,7 +71,9 @@ class MLXSampler:
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "generate_image"
 
-    def generate_image(self, mlx_model, seed, steps, cfg, mlx_positive_conditioning, latent_image, denoise): 
+    def generate_image(self, mlx_model, seed, steps, cfg, mlx_positive_conditioning, latent_image, denoise):
+        # Ensure seed is within valid range for MLX (32-bit)
+        seed = seed & 0xffffffff 
         
         conditioning = mlx_positive_conditioning["conditioning"]
         pooled_conditioning = mlx_positive_conditioning["pooled_conditioning"]
@@ -79,6 +81,18 @@ class MLXSampler:
         cfg_weight = cfg
             
         batch, channels, height, width = latent_image["samples"].shape
+        
+        # Ensure latent dimensions are integers (ComfyUI sometimes passes floats)
+        height = int(height)
+        width = int(width)
+        
+        # Validate dimensions for Flux models
+        # Flux requires dimensions divisible by 16 (patch size * vae scale)
+        if height % 16 != 0 or width % 16 != 0:
+            raise ValueError(
+                f"Latent dimensions must be divisible by 16. Got {height}x{width}. "
+                f"For a {height*8}x{width*8} pixel image, use a {(height//16)*16}x{(width//16)*16} latent."
+            )
         
         latent_size = (height, width)
         
@@ -133,7 +147,22 @@ class MLXLoadFlux:
 
         self.check_model_folder(model_version)
 
-        model = FluxPipeline(model_version=model_version, low_memory_mode=False, w16=True, a16=True)
+        try:
+            print(f"Loading {model_version}...")
+            model = FluxPipeline(model_version=model_version, low_memory_mode=False, w16=True, a16=True)
+        except Exception as e:
+            # Provide more helpful error message
+            error_msg = str(e)
+            if "does not have parameter" in error_msg or "mlp" in error_msg:
+                raise RuntimeError(
+                    f"Failed to load {model_version}. This may be due to:\n"
+                    f"1. Incompatible model weights format\n"
+                    f"2. Model not fully downloaded (try deleting cache and re-downloading)\n"
+                    f"3. Model architecture mismatch\n\n"
+                    f"Original error: {error_msg}\n\n"
+                    f"Try: Delete ~/.cache/huggingface/hub/models--{model_version.replace('/', '--')} and restart ComfyUI"
+                )
+            raise
 
         clip = {
             "model_name": model_version,
@@ -175,13 +204,27 @@ class MLXLoadFluxLocal:
         
         print(f"Loading model from local path: {local_path}")
 
-        model = FluxPipeline(
-            model_version=model_version, 
-            low_memory_mode=False, 
-            w16=True, 
-            a16=True,
-            local_ckpt=local_path
-        )
+        try:
+            model = FluxPipeline(
+                model_version=model_version, 
+                low_memory_mode=False, 
+                w16=True, 
+                a16=True,
+                local_ckpt=local_path
+            )
+        except Exception as e:
+            # Provide more helpful error message
+            error_msg = str(e)
+            if "does not have parameter" in error_msg or "mlp" in error_msg:
+                raise RuntimeError(
+                    f"Failed to load model from {local_path}. This may be due to:\n"
+                    f"1. Incompatible model weights format\n"
+                    f"2. Corrupted model file\n"
+                    f"3. Model architecture mismatch with {model_version}\n\n"
+                    f"Original error: {error_msg}\n\n"
+                    f"Ensure the local checkpoint matches the selected model version."
+                )
+            raise
 
         clip = {
             "model_name": model_version,
