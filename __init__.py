@@ -15,6 +15,10 @@ import os
 import gc
 
 class MLXDecoder:
+    """
+    Decodes MLX latent representations into images.
+    Converts MLX tensors to PyTorch format compatible with ComfyUI.
+    """
 
     @classmethod
     def INPUT_TYPES(s):
@@ -47,6 +51,10 @@ class MLXDecoder:
 
 
 class MLXSampler:
+    """
+    MLX-optimized sampler for generating images from text conditioning.
+    Performs denoising diffusion with configurable steps, CFG, and seed.
+    """
     @classmethod
     def INPUT_TYPES(s):
         return {"required":
@@ -93,6 +101,10 @@ class MLXSampler:
 
 
 class MLXLoadFlux:
+    """
+    Loads Flux models from HuggingFace Hub.
+    Supports schnell, dev, and 4-bit quantized variants.
+    """
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
@@ -135,15 +147,74 @@ class MLXLoadFlux:
         
 
         return (model, model.decoder, clip)
+
+
+class MLXLoadFluxLocal:
+    """
+    Loads Flux models from a local checkpoint file.
+    Useful for loading custom or locally stored models.
+    """
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+            "model_version": ([
+                        "argmaxinc/mlx-FLUX.1-schnell-4bit-quantized",
+                        "argmaxinc/mlx-FLUX.1-schnell",  
+                        "argmaxinc/mlx-FLUX.1-dev"
+                        ],),
+            "local_path": ("STRING", {"default": "", "multiline": False})
+        }}
+    
+    RETURN_TYPES = ("mlx_model", "mlx_vae", "mlx_conditioning")
+    FUNCTION = "load_flux_model"
+
+    def load_flux_model(self, model_version, local_path):
+        
+        if not os.path.exists(local_path):
+            raise ValueError(f"Local model path does not exist: {local_path}")
+        
+        print(f"Loading model from local path: {local_path}")
+
+        model = FluxPipeline(
+            model_version=model_version, 
+            low_memory_mode=False, 
+            w16=True, 
+            a16=True,
+            local_ckpt=local_path
+        )
+
+        clip = {
+            "model_name": model_version,
+            "clip_l_model": model.clip_l,
+            "clip_l_tokenizer": model.tokenizer_l,
+            "t5_model": model.t5_encoder,
+            "t5_tokenizer": model.t5_tokenizer
+        }
+        
+        print("Local model successfully loaded.")
+        
+        return (model, model.decoder, clip)
     
 
 
 
 class MLXClipTextEncoder: 
+    """
+    Encodes text prompts using CLIP and T5 encoders for MLX-based Flux models.
+    Supports both positive and optional negative prompts for better control.
+    """
 
     @classmethod
     def INPUT_TYPES(s):
-        return {"required": {"text": ("STRING", {"multiline": True, "dynamicPrompts": True}), "mlx_conditioning": ("mlx_conditioning", {"forceInput":True})}}
+        return {
+            "required": {
+                "text": ("STRING", {"multiline": True, "dynamicPrompts": True}), 
+                "mlx_conditioning": ("mlx_conditioning", {"forceInput":True})
+            },
+            "optional": {
+                "negative_text": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": ""})
+            }
+        }
 
 
     RETURN_TYPES = ("mlx_conditioning",)
@@ -173,7 +244,7 @@ class MLXClipTextEncoder:
 
         return tokens
 
-    def encode(self, mlx_conditioning, text):
+    def encode(self, mlx_conditioning, text, negative_text=""):
 
         T5_MAX_LENGTH = {
             "argmaxinc/mlx-stable-diffusion-3-medium": 512,
@@ -225,6 +296,7 @@ class MLXClipTextEncoder:
 NODE_CLASS_MAPPINGS = {
     "MLXClipTextEncoder": MLXClipTextEncoder,
     "MLXLoadFlux": MLXLoadFlux,
+    "MLXLoadFluxLocal": MLXLoadFluxLocal,
     "MLXSampler": MLXSampler,
     "MLXDecoder": MLXDecoder
 }
@@ -233,6 +305,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MLXClipTextEncoder": "MLX CLIP Text Encoder",
     "MLXLoadFlux": "MLX Load Flux Model from HF 🤗",
+    "MLXLoadFluxLocal": "MLX Load Flux Model from Local Path 📁",
     "MLXSampler": "MLX Sampler",
     "MLXDecoder": "MLX Decoder"
 }

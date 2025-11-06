@@ -69,7 +69,7 @@ class DiffusionPipeline:
         a16: bool = False,
         local_ckpt=None,
     ):
-        model_io.LOCAl_SD3_CKPT = local_ckpt
+        model_io.LOCAL_SD3_CKPT = local_ckpt
         self.float16_dtype = mx.float16
         model_io._FLOAT16 = self.float16_dtype
         self.dtype = self.float16_dtype if w16 else mx.float32
@@ -603,7 +603,7 @@ class FluxPipeline(DiffusionPipeline):
         local_ckpt=None,
         quantize_mmdit: bool = False,
     ):
-        model_io.LOCAl_SD3_CKPT = local_ckpt
+        model_io.LOCAL_SD3_CKPT = local_ckpt
         self.float16_dtype = mx.bfloat16
         model_io._FLOAT16 = self.float16_dtype
         self.dtype = self.float16_dtype if w16 else mx.float32
