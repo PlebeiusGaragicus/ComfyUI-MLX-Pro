@@ -135,6 +135,10 @@ class MLXDecoder:
 
 
 class MLXEncoder:
+    """
+    Encodes images into MLX latent representations for img2img workflows.
+    Converts ComfyUI images to VAE latents with proper Flux latent format scaling.
+    """
 
     @classmethod
     def INPUT_TYPES(s):
@@ -142,21 +146,20 @@ class MLXEncoder:
             "required": {
                 "image": ("IMAGE",),
                 "mlx_model": ("mlx_model",),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
             }
         }
 
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "encode"
 
-    def encode(self, image, mlx_model, seed):
+    def encode(self, image, mlx_model):
 
         # Ensure batch dimension
         if image.dim() == 3:
             image = image.unsqueeze(0)
 
-        # ComfyUI IMAGE is BCHW in [0, 1]; convert to NHWC in [-1, 1] for MLX VAE encoder
-        image_np = image.permute(0, 2, 3, 1).cpu().numpy().astype("float32")
+        # ComfyUI IMAGE is BHWC in [0, 1]; convert to [-1, 1] for MLX VAE encoder
+        image_np = image.cpu().numpy().astype("float32")
         image_np = image_np * 2.0 - 1.0
         image_mx = mx.array(image_np)
 
@@ -166,11 +169,12 @@ class MLXEncoder:
         logvar = mx.clip(logvar, -30.0, 20.0)
         std = mx.exp(0.5 * logvar)
 
-        # Reuse the model's noise helper to stay consistent with encode_image_to_latents
-        noise = mlx_model.get_noise(seed, mean)
+        # Use deterministic VAE encoding: mean only (no sampling noise)
+        latents = mean.astype(mlx_model.activation_dtype)
 
-        latents = mean + std * noise
-        latents = latents.astype(mlx_model.activation_dtype)
+        # Apply latent format scaling (required for Flux models)
+        # This transforms raw VAE output to the scaled latent space
+        latents = mlx_model.latent_format.process_in(latents)
 
         mx.eval(latents)
 
@@ -242,6 +246,17 @@ class MLXSampler:
         
         latent_size = (height, width)
         
+        # Prepare input latents for img2img workflow
+        # If denoise < 1.0, we use the input latents as starting point
+        input_latents = None
+        if denoise < 1.0:
+            # Convert PyTorch latents (NCHW) back to MLX format (NHWC)
+            latents_torch = latent_image["samples"]
+            # NCHW -> NHWC
+            latents_torch = latents_torch.permute(0, 2, 3, 1)
+            latents_np = latents_torch.cpu().numpy().astype("float32")
+            input_latents = mx.array(latents_np).astype(mlx_model.activation_dtype)
+        
         latents, iter_time  = mlx_model.denoise_latents(
             conditioning,
             pooled_conditioning,
@@ -251,6 +266,7 @@ class MLXSampler:
             seed=seed,
             image_path=None,
             denoise=denoise,
+            input_latents=input_latents,
         )
 
         mx.eval(latents)
