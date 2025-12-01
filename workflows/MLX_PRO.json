@@ -1,0 +1,147 @@
+{
+  "2": {
+    "inputs": {
+      "model_version": "argmaxinc/mlx-FLUX.1-schnell-4bit-quantized"
+    },
+    "class_type": "MLXLoadFlux",
+    "_meta": {
+      "title": "MLX Load Flux Model from HF 🤗"
+    }
+  },
+  "3": {
+    "inputs": {
+      "text": "photograph of a girl with a pink dress standing in a lush, green meadow with a clear blue sky, large blue eyes, smile, arms extended, large fluffy bunny ears",
+      "mlx_conditioning": [
+        "2",
+        2
+      ]
+    },
+    "class_type": "MLXClipTextEncoder",
+    "_meta": {
+      "title": "MLX CLIP Text Encoder"
+    }
+  },
+  "5": {
+    "inputs": {
+      "latent_image": [
+        "9",
+        0
+      ],
+      "mlx_vae": [
+        "2",
+        1
+      ]
+    },
+    "class_type": "MLXDecoder",
+    "_meta": {
+      "title": "MLX Decoder"
+    }
+  },
+  "7": {
+    "inputs": {
+      "filename_prefix": "MLX-Pro",
+      "images": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "9": {
+    "inputs": {
+      "seed": 18,
+      "steps": 4,
+      "cfg": 0,
+      "denoise": 0.82,
+      "mlx_model": [
+        "2",
+        0
+      ],
+      "mlx_positive_conditioning": [
+        "3",
+        0
+      ],
+      "mlx_negative_conditioning": [
+        "13",
+        0
+      ],
+      "latent_image": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "MLXSampler",
+    "_meta": {
+      "title": "MLX Sampler"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": [
+        "16",
+        0
+      ],
+      "mlx_model": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "MLXEncoder",
+    "_meta": {
+      "title": "MLX Encoder"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": "example.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "13": {
+    "inputs": {
+      "text": "low quality",
+      "mlx_conditioning": [
+        "2",
+        2
+      ]
+    },
+    "class_type": "MLXClipTextEncoder",
+    "_meta": {
+      "title": "MLX CLIP Text Encoder"
+    }
+  },
+  "16": {
+    "inputs": {
+      "target_width": 512,
+      "target_height": 512,
+      "padding_color": "black",
+      "interpolation": "area",
+      "image": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "ResizeAndPadImage",
+    "_meta": {
+      "title": "ResizeAndPadImage"
+    }
+  },
+  "17": {
+    "inputs": {
+      "images": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  }
+}
