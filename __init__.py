@@ -138,6 +138,7 @@ class MLXEncoder:
     """
     Encodes images into MLX latent representations for img2img workflows.
     Converts ComfyUI images to VAE latents with proper Flux latent format scaling.
+    Supports optional mask for inpainting (white=edit, black=keep).
     """
 
     @classmethod
@@ -146,13 +147,16 @@ class MLXEncoder:
             "required": {
                 "image": ("IMAGE",),
                 "mlx_model": ("mlx_model",),
+            },
+            "optional": {
+                "mask": ("MASK",),
             }
         }
 
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "encode"
 
-    def encode(self, image, mlx_model):
+    def encode(self, image, mlx_model, mask=None):
 
         # Ensure batch dimension
         if image.dim() == 3:
@@ -185,7 +189,28 @@ class MLXEncoder:
         if latents_torch.dim() == 4:
             latents_torch = latents_torch.permute(0, 3, 1, 2)
 
-        return ({"samples": latents_torch},)
+        result = {"samples": latents_torch}
+
+        # Process mask for inpainting if provided
+        if mask is not None:
+            # Ensure batch dimension for mask
+            if mask.dim() == 2:
+                mask = mask.unsqueeze(0)
+            
+            # Downsample mask to latent space (1/8 resolution for Flux VAE)
+            # ComfyUI MASK is (B, H, W) with values 0-1
+            batch, channels, latent_h, latent_w = latents_torch.shape
+            
+            # Use area interpolation for downsampling mask
+            mask_resized = torch.nn.functional.interpolate(
+                mask.unsqueeze(1),  # Add channel dim: (B, 1, H, W)
+                size=(latent_h, latent_w),
+                mode='area'
+            )
+            # Result is (B, 1, latent_h, latent_w)
+            result["noise_mask"] = mask_resized.squeeze(1)  # (B, latent_h, latent_w)
+
+        return (result,)
 
 class MLXSampler:
     """
@@ -246,10 +271,21 @@ class MLXSampler:
         
         latent_size = (height, width)
         
-        # Prepare input latents for img2img workflow
-        # If denoise < 1.0, we use the input latents as starting point
+        # Prepare inpainting mask if present
+        # mask=1 means edit (use denoised), mask=0 means keep original
+        inpaint_mask = None
+        has_mask = "noise_mask" in latent_image
+        if has_mask:
+            # Convert PyTorch mask (B, H, W) to MLX format (B, H, W, 1) for broadcasting
+            mask_torch = latent_image["noise_mask"]
+            mask_np = mask_torch.cpu().numpy().astype("float32")
+            # Add channel dimension for broadcasting with latents (B, H, W, C)
+            inpaint_mask = mx.array(mask_np[:, :, :, None]).astype(mlx_model.activation_dtype)
+        
+        # Prepare input latents for img2img/inpainting workflow
+        # Need latents if: denoise < 1.0 (img2img) OR has_mask (inpainting)
         input_latents = None
-        if denoise < 1.0:
+        if denoise < 1.0 or has_mask:
             # Convert PyTorch latents (NCHW) back to MLX format (NHWC)
             latents_torch = latent_image["samples"]
             # NCHW -> NHWC
@@ -267,6 +303,7 @@ class MLXSampler:
             image_path=None,
             denoise=denoise,
             input_latents=input_latents,
+            inpaint_mask=inpaint_mask,
         )
 
         mx.eval(latents)

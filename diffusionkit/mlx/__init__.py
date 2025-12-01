@@ -258,6 +258,7 @@ class DiffusionPipeline:
         image_path: Optional[str] = None,
         denoise: float = 1.0,
         input_latents: Optional[mx.array] = None,
+x        inpaint_mask: Optional[mx.array] = None,
     ):
         # Set the PRNG state
         seed = int(time.time()) if seed is None else seed
@@ -265,12 +266,18 @@ class DiffusionPipeline:
         mx.random.seed(seed)
 
         x_T = self.get_empty_latent(*latent_size)
+        original_latents = None
         if input_latents is not None:
             # Use pre-computed latents (already scaled by encoder)
             x_T = input_latents
+            # Store original for inpainting blending
+            if inpaint_mask is not None:
+                original_latents = input_latents
         elif image_path is not None:
             x_T = self.encode_image_to_latents(image_path, seed=seed)
             x_T = self.latent_format.process_in(x_T)
+            if inpaint_mask is not None:
+                original_latents = x_T
         else:
             # txt2img: full denoise from noise
             denoise = 1.0
@@ -282,11 +289,29 @@ class DiffusionPipeline:
             "cfg_weight": cfg_weight,
             "pooled_conditioning": pooled_conditioning,
         }
-        noise_scaled = self.sampler.noise_scaling(
-            sigmas[0], noise, x_T, self.max_denoise(sigmas)
-        )
+        
+        # For inpainting: masked areas should start from pure noise to generate new content
+        # Unmasked areas start from original latents (with appropriate noise level)
+        if inpaint_mask is not None and original_latents is not None:
+            # Create starting latents using proper noise scaling:
+            # - masked area (1): pure noise from empty latent (like txt2img)
+            # - unmasked area (0): original with noise (like img2img)
+            empty_latent = self.get_empty_latent(*latent_size)
+            pure_noise_start = self.sampler.noise_scaling(
+                sigmas[0], noise, empty_latent, True  # max_denoise=True for txt2img-like
+            )
+            original_noised = self.sampler.noise_scaling(
+                sigmas[0], noise, original_latents, False  # max_denoise=False for img2img-like
+            )
+            # Blend: mask=1 gets pure noise, mask=0 gets original noised
+            noise_scaled = inpaint_mask * pure_noise_start + (1.0 - inpaint_mask) * original_noised
+        else:
+            noise_scaled = self.sampler.noise_scaling(
+                sigmas[0], noise, x_T, self.max_denoise(sigmas)
+            )
         latent, iter_time = sample_euler(
-            CFGDenoiser(self), noise_scaled, sigmas, extra_args=extra_args
+            CFGDenoiser(self), noise_scaled, sigmas, extra_args=extra_args,
+            inpaint_mask=inpaint_mask, original_latents=original_latents,
         )
 
         latent = self.latent_format.process_out(latent)
@@ -760,8 +785,13 @@ def to_d(x, sigma, denoised):
     return (x - denoised) / append_dims(sigma, x.ndim)
 
 
-def sample_euler(model: CFGDenoiser, x, sigmas, extra_args=None):
-    """Implements Algorithm 2 (Euler steps) from Karras et al. (2022)."""
+def sample_euler(model: CFGDenoiser, x, sigmas, extra_args=None, 
+                 inpaint_mask=None, original_latents=None):
+    """Implements Algorithm 2 (Euler steps) from Karras et al. (2022).
+    
+    For inpainting: blends denoised latents with original at each step.
+    mask=1 means edit (use denoised), mask=0 means keep original.
+    """
     extra_args = {} if extra_args is None else extra_args
 
     from tqdm import trange
@@ -781,9 +811,28 @@ def sample_euler(model: CFGDenoiser, x, sigmas, extra_args=None):
         dt = sigmas[i + 1] - sigmas[i]
         # Euler method
         x = x + d * dt
+        
+        # Inpainting: blend with original latents using mask
+        # At each step, we need to add noise to original latents at current sigma level
+        # then blend: x = mask * x_denoised + (1 - mask) * x_original_noised
+        if inpaint_mask is not None and original_latents is not None:
+            # Get noise level for next step
+            if i + 1 < len(sigmas) - 1:
+                # Add appropriate noise to original latents for this sigma level
+                noise = model.model.get_noise(0, original_latents)
+                noised_original = model.model.sampler.noise_scaling(
+                    sigmas[i + 1], noise, original_latents, False
+                )
+                # Blend: mask=1 keeps denoised (edit area), mask=0 keeps original
+                x = inpaint_mask * x + (1.0 - inpaint_mask) * noised_original
+        
         mx.eval(x)
         end_time = t.format_dict["elapsed"]
         iter_time.append(round((end_time - start_time), 3))
+
+    # Final blend without noise for the last step
+    if inpaint_mask is not None and original_latents is not None:
+        x = inpaint_mask * x + (1.0 - inpaint_mask) * original_latents
 
     model.clear_cache()
 
