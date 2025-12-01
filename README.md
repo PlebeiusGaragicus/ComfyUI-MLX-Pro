@@ -14,8 +14,6 @@ Faster workflows for ComfyUI users on Mac with Apple silicon
 
 ## Performances 
 
-![ComfyUI-MLX benchmark](./data/benchmark.png)
-
 Given the following environment: 
 
 - Device: MacBook M2 Max, 96 GB

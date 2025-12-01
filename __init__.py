@@ -134,6 +134,55 @@ class MLXDecoder:
         return (decoded_torch,)
 
 
+class MLXEncoder:
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mlx_model": ("mlx_model",),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            }
+        }
+
+    RETURN_TYPES = ("LATENT",)
+    FUNCTION = "encode"
+
+    def encode(self, image, mlx_model, seed):
+
+        # Ensure batch dimension
+        if image.dim() == 3:
+            image = image.unsqueeze(0)
+
+        # ComfyUI IMAGE is BCHW in [0, 1]; convert to NHWC in [-1, 1] for MLX VAE encoder
+        image_np = image.permute(0, 2, 3, 1).cpu().numpy().astype("float32")
+        image_np = image_np * 2.0 - 1.0
+        image_mx = mx.array(image_np)
+
+        # VAE encode using the already-loaded encoder on the MLX model
+        hidden = mlx_model.encoder(image_mx)
+        mean, logvar = hidden.split(2, axis=-1)
+        logvar = mx.clip(logvar, -30.0, 20.0)
+        std = mx.exp(0.5 * logvar)
+
+        # Reuse the model's noise helper to stay consistent with encode_image_to_latents
+        noise = mlx_model.get_noise(seed, mean)
+
+        latents = mean + std * noise
+        latents = latents.astype(mlx_model.activation_dtype)
+
+        mx.eval(latents)
+
+        # Convert MLX latents (NHWC) to PyTorch tensor in BCHW format for ComfyUI
+        latents_np = np.array(latents.astype(mx.float16))
+        latents_torch = torch.from_numpy(latents_np).float()
+        # NHWC -> NCHW
+        if latents_torch.dim() == 4:
+            latents_torch = latents_torch.permute(0, 3, 1, 2)
+
+        return ({"samples": latents_torch},)
+
 class MLXSampler:
     """
     MLX-optimized sampler for generating images from text conditioning.
@@ -467,7 +516,8 @@ NODE_CLASS_MAPPINGS = {
     "MLXLoadFlux": MLXLoadFlux,
     "MLXLoadFluxLocal": MLXLoadFluxLocal,
     "MLXSampler": MLXSampler,
-    "MLXDecoder": MLXDecoder
+    "MLXDecoder": MLXDecoder,
+    "MLXEncoder": MLXEncoder
 }
 
 # Node display name mappings
@@ -476,5 +526,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MLXLoadFlux": "MLX Load Flux Model from HF 🤗",
     "MLXLoadFluxLocal": "MLX Load Flux Model from Local Path 📁",
     "MLXSampler": "MLX Sampler",
-    "MLXDecoder": "MLX Decoder"
+    "MLXDecoder": "MLX Decoder",
+    "MLXEncoder": "MLX Encoder"
 }
